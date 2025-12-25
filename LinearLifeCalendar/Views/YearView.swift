@@ -1,5 +1,71 @@
 import SwiftUI
 
+// SwiftUI原生的圆角实现
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: RectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        
+        let topLeft = corners.contains(.topLeft) ? radius : 0
+        let topRight = corners.contains(.topRight) ? radius : 0
+        let bottomLeft = corners.contains(.bottomLeft) ? radius : 0
+        let bottomRight = corners.contains(.bottomRight) ? radius : 0
+        
+        path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
+        
+        // Top edge and top-right corner
+        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
+        if topRight > 0 {
+            path.addArc(center: CGPoint(x: rect.maxX - topRight, y: rect.minY + topRight),
+                       radius: topRight, startAngle: Angle(degrees: -90), endAngle: Angle(degrees: 0), clockwise: false)
+        }
+        
+        // Right edge and bottom-right corner
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
+        if bottomRight > 0 {
+            path.addArc(center: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY - bottomRight),
+                       radius: bottomRight, startAngle: Angle(degrees: 0), endAngle: Angle(degrees: 90), clockwise: false)
+        }
+        
+        // Bottom edge and bottom-left corner
+        path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
+        if bottomLeft > 0 {
+            path.addArc(center: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY - bottomLeft),
+                       radius: bottomLeft, startAngle: Angle(degrees: 90), endAngle: Angle(degrees: 180), clockwise: false)
+        }
+        
+        // Left edge and top-left corner
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
+        if topLeft > 0 {
+            path.addArc(center: CGPoint(x: rect.minX + topLeft, y: rect.minY + topLeft),
+                       radius: topLeft, startAngle: Angle(degrees: 180), endAngle: Angle(degrees: 270), clockwise: false)
+        }
+        
+        return path
+    }
+}
+
+// 定义圆角位置
+struct RectCorner: OptionSet {
+    let rawValue: Int
+    
+    static let topLeft = RectCorner(rawValue: 1 << 0)
+    static let topRight = RectCorner(rawValue: 1 << 1)
+    static let bottomLeft = RectCorner(rawValue: 1 << 2)
+    static let bottomRight = RectCorner(rawValue: 1 << 3)
+    
+    static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
+}
+
+// 扩展View以支持指定圆角
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
 struct YearView: View {
     let currentDate: Date
     let events: [CalendarEvent]
@@ -10,6 +76,7 @@ struct YearView: View {
     @State private var isDragging = false
     @State private var selectionStart: Date?
     @State private var selectionEnd: Date?
+    @State private var multiDayEventRows: [String: Int] = [:] // 跨日事件行号映射
     
     var body: some View {
         GeometryReader { geometry in
@@ -21,6 +88,20 @@ struct YearView: View {
             .onTapGesture { _ in
                 clearSelection()
             }
+            .onAppear {
+                initializeMultiDayEventRows()
+            }
+        }
+    }
+    
+    // 初始化跨日事件行号映射
+    private func initializeMultiDayEventRows() {
+        multiDayEventRows.removeAll()
+        
+        let multiDayEvents = events.filter { $0.isMultiDay }.sorted { $0.startDate < $1.startDate }
+        
+        for (index, event) in multiDayEvents.enumerated() {
+            multiDayEventRows[event.id] = index
         }
     }
     
@@ -147,7 +228,7 @@ struct YearView: View {
             )
     }
     
-    // 月份行 - 真正对齐的线性日历实现
+    // 月份行 - 真正对齐的线性日历实现，支持跨日事件连续显示
     private func monthRow(for monthDate: Date, dayColumnWidth: CGFloat, monthLabelWidth: CGFloat) -> some View {
         let calendar = Calendar.current
         let monthStartDate = monthDate.startOfMonth
@@ -169,11 +250,14 @@ struct YearView: View {
         // 固定显示31列（最大月份天数），确保所有月份对齐
         let totalColumns = 31
         
+        // 获取该月的所有事件，用于跨日连续显示
+        let monthEvents = getEventsForMonth(monthDate: monthDate)
+        
         return HStack(spacing: 0) {
             // 左侧月份标签
             monthLabel(monthName: monthName, alignment: .trailing, width: monthLabelWidth)
             
-            // 日期网格 - 固定31列确保对齐
+            // 日期网格 - 固定31列确保对齐，支持跨日事件
             ForEach(0..<totalColumns, id: \.self) { index in
                 if index < leadingEmptyDays {
                     // 前置空白
@@ -182,7 +266,13 @@ struct YearView: View {
                     // 实际日期
                     let dayNumber = index - leadingEmptyDays + 1
                     if let dayDate = calendar.date(byAdding: .day, value: dayNumber - 1, to: monthStartDate) {
-                        alignedDayCell(for: dayDate, dayNumber: dayNumber, columnIndex: index, width: dayColumnWidth)
+                        alignedDayCellWithContinuousEvents(
+                            for: dayDate, 
+                            dayNumber: dayNumber, 
+                            columnIndex: index, 
+                            width: dayColumnWidth,
+                            monthEvents: monthEvents
+                        )
                     } else {
                         emptyAlignedCell(columnIndex: index, width: dayColumnWidth)
                     }
@@ -201,6 +291,244 @@ struct YearView: View {
                 .foregroundColor(Color.gray.opacity(0.2)),
             alignment: .bottom
         )
+    }
+    
+    // 获取指定月份的所有事件
+    private func getEventsForMonth(monthDate: Date) -> [CalendarEvent] {
+        let calendar = Calendar.current
+        let monthStart = monthDate.startOfMonth
+        let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart)!
+        
+        return events.filter { event in
+            event.startDate < monthEnd && event.endDate > monthStart
+        }.sorted { $0.startDate < $1.startDate }
+    }
+    
+    // 支持跨日连续事件的日期单元格 - 重新设计布局逻辑
+    private func alignedDayCellWithContinuousEvents(
+        for date: Date, 
+        dayNumber: Int, 
+        columnIndex: Int, 
+        width: CGFloat,
+        monthEvents: [CalendarEvent]
+    ) -> some View {
+        let dayEvents = monthEvents.filter { $0.occursOn(date: date) }
+        let isToday = date.isToday
+        let isWeekend = isWeekendColumn(columnIndex: columnIndex)
+        
+        // 获取跨日事件的布局信息
+        let eventLayout = calculateEventLayout(for: date, events: dayEvents, monthEvents: monthEvents)
+        
+        return ZStack {
+            // 背景
+            Rectangle()
+                .fill(getAlignedDayColor(isToday: isToday, isWeekend: isWeekend, hasEvents: !dayEvents.isEmpty))
+                .frame(width: width, height: 100)
+            
+            // 事件层 - 精确控制布局
+            if !eventLayout.displayEvents.isEmpty {
+                VStack(spacing: 1) {
+                    // 显示最多4个事件
+                    ForEach(Array(eventLayout.displayEvents.enumerated()), id: \.element.id) { index, event in
+                        eventPillWithLayout(
+                            event: event,
+                            date: date,
+                            width: width,
+                            rowIndex: eventLayout.eventRows[event.id] ?? 0,
+                            isMultiDay: event.isMultiDay
+                        )
+                    }
+                    
+                    // 显示剩余事件数量
+                    if eventLayout.remainingCount > 0 {
+                        remainingEventsIndicator(count: eventLayout.remainingCount, width: width)
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.top, 2)
+            } else {
+                // 无事件时显示日期数字
+                VStack {
+                    Text("\(dayNumber)")
+                        .font(.system(size: min(10, width * 0.4), weight: .medium))
+                        .foregroundColor(isToday ? .white : .primary)
+                        .minimumScaleFactor(0.5)
+                    Spacer()
+                }
+                .padding(.top, 4)
+            }
+        }
+        .overlay(
+            Rectangle()
+                .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
+        )
+        .onTapGesture {
+            onDateClick(date)
+        }
+        .onTapGesture(count: 2) {
+            onCreateEvent(date, nil)
+        }
+    }
+    
+    // 事件布局信息
+    struct EventLayout {
+        let displayEvents: [CalendarEvent]  // 显示的事件（最多4个）
+        let remainingCount: Int             // 剩余事件数量
+        let eventRows: [String: Int]        // 事件ID到行号的映射
+    }
+    
+    // 计算事件布局 - 使用全局行号映射确保跨日事件对齐
+    private func calculateEventLayout(for date: Date, events: [CalendarEvent], monthEvents: [CalendarEvent]) -> EventLayout {
+        let maxDisplayEvents = 4
+        var eventRows: [String: Int] = [:]
+        var usedRows: Set<Int> = []
+        var displayEvents: [CalendarEvent] = []
+        
+        // 首先处理跨日事件，确保它们在同一行
+        let multiDayEvents = events.filter { $0.isMultiDay }.sorted { $0.startDate < $1.startDate }
+        let singleDayEvents = events.filter { !$0.isMultiDay }.sorted { $0.startDate < $1.startDate }
+        
+        var currentRow = 0
+        
+        // 为跨日事件分配行号，确保同一事件在所有日期都在同一行
+        for event in multiDayEvents {
+            if displayEvents.count >= maxDisplayEvents { break }
+            
+            // 检查这个事件是否已经被分配了全局行号
+            if let existingRow = multiDayEventRows[event.id] {
+                eventRows[event.id] = existingRow
+                usedRows.insert(existingRow)
+            } else {
+                // 找到第一个可用的行
+                while usedRows.contains(currentRow) {
+                    currentRow += 1
+                }
+                eventRows[event.id] = currentRow
+                usedRows.insert(currentRow)
+                // 更新全局映射
+                DispatchQueue.main.async {
+                    self.multiDayEventRows[event.id] = currentRow
+                }
+                currentRow += 1
+            }
+            displayEvents.append(event)
+        }
+        
+        // 为单日事件分配剩余的行
+        for event in singleDayEvents {
+            if displayEvents.count >= maxDisplayEvents { break }
+            
+            // 找到第一个可用的行
+            while usedRows.contains(currentRow) {
+                currentRow += 1
+            }
+            eventRows[event.id] = currentRow
+            usedRows.insert(currentRow)
+            displayEvents.append(event)
+            currentRow += 1
+        }
+        
+        let remainingCount = max(0, events.count - displayEvents.count)
+        
+        return EventLayout(
+            displayEvents: displayEvents,
+            remainingCount: remainingCount,
+            eventRows: eventRows
+        )
+    }
+    
+    // 查找跨日事件在其他日期的行号 - 现在使用全局映射
+    private func findExistingRowForEvent(event: CalendarEvent, monthEvents: [CalendarEvent], date: Date) -> Int? {
+        return multiDayEventRows[event.id]
+    }
+    
+    // 带布局信息的事件pill
+    private func eventPillWithLayout(
+        event: CalendarEvent,
+        date: Date,
+        width: CGFloat,
+        rowIndex: Int,
+        isMultiDay: Bool
+    ) -> some View {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        
+        let continuesPrev = event.startDate < dayStart
+        let continuesNext = event.endDate > dayEnd
+        let isFirstDayOfMonth = date.day == 1
+        let showTitle = !continuesPrev || isFirstDayOfMonth
+        
+        let pillHeight: CGFloat = 16 // 固定高度，一行文字
+        
+        return Button(action: {
+            onEventClick(event)
+        }) {
+            ZStack {
+                // 事件背景
+                Rectangle()
+                    .fill(event.color)
+                    .frame(width: width, height: pillHeight)
+                    .cornerRadius(getEventCornerRadius(continuesPrev: continuesPrev, continuesNext: continuesNext), corners: getEventCorners(continuesPrev: continuesPrev, continuesNext: continuesNext))
+                
+                // 事件文字
+                HStack {
+                    if showTitle {
+                        if isMultiDay {
+                            // 跨日事件：文字可以平铺显示，超出长度省略
+                            Text(event.title)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(.horizontal, 3)
+                        } else {
+                            // 单日事件：文字严格控制在pill内，不换行
+                            Text(event.title)
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .minimumScaleFactor(0.6)
+                                .padding(.horizontal, 2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    // 获取事件圆角半径
+    private func getEventCornerRadius(continuesPrev: Bool, continuesNext: Bool) -> CGFloat {
+        return 4 // 统一使用4像素圆角
+    }
+    
+    // 获取事件圆角位置
+    private func getEventCorners(continuesPrev: Bool, continuesNext: Bool) -> RectCorner {
+        if continuesPrev && continuesNext {
+            return [] // 中间部分不要圆角
+        } else if continuesPrev {
+            return [.topRight, .bottomRight] // 只有右边圆角
+        } else if continuesNext {
+            return [.topLeft, .bottomLeft] // 只有左边圆角
+        } else {
+            return .allCorners // 单日事件，四个角都圆角
+        }
+    }
+    
+    // 剩余事件指示器
+    private func remainingEventsIndicator(count: Int, width: CGFloat) -> some View {
+        HStack {
+            Text("+\(count)")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 2)
+            Spacer()
+        }
+        .frame(height: 12)
     }
     
     // 改进的日期计算方法 - 确保月份边界对齐准确性
@@ -317,7 +645,7 @@ struct YearView: View {
         VStack(spacing: 1) {
             // 简化的日期显示 - 只显示颜色指示
             Rectangle()
-                .fill(isToday ? Color.blue : (dayEvents.isEmpty ? Color.clear : Color.red))
+                .fill(isToday ? Color.blue : Color.clear)
                 .frame(height: 2)
             
             // 事件指示器
@@ -465,44 +793,22 @@ struct YearView: View {
             )
     }
     
-    // 对齐的日期单元格 - 确保星期几对齐
-    private func alignedDayCell(for date: Date, dayNumber: Int, columnIndex: Int, width: CGFloat) -> some View {
-        let dayEvents = events.filter { $0.occursOn(date: date) }
-        let isToday = date.isToday
-        let isWeekend = isWeekendColumn(columnIndex: columnIndex)
-        
-        return Rectangle()
-            .fill(getAlignedDayColor(isToday: isToday, isWeekend: isWeekend, hasEvents: !dayEvents.isEmpty))
-            .frame(width: width, height: 100) // 使用动态宽度
-            .overlay(
-                VStack(spacing: 2) {
-                    // 显示日期数字
-                    Text("\(dayNumber)")
-                        .font(.system(size: min(8, width * 0.4), weight: .medium)) // 根据宽度调整字体大小
-                        .foregroundColor(isToday ? .white : .primary)
-                        .minimumScaleFactor(0.5)
-                    
-                    // 事件指示器
-                    if !dayEvents.isEmpty {
-                        Circle()
-                            .fill(dayEvents.first?.color ?? Color.red)
-                            .frame(width: min(4, width * 0.2), height: min(4, width * 0.2)) // 根据宽度调整指示器大小
-                    }
-                    
-                    Spacer()
-                }
-                .padding(.top, 2)
-            )
-            .overlay(
-                Rectangle()
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
-            )
-            .onTapGesture {
-                onDateClick(date)
-            }
-            .onTapGesture(count: 2) {
-                onCreateEvent(date, nil)
-            }
+    // 年视图事件药丸 - 适应窄列宽度的紧凑版本
+    private func yearEventPill(for event: CalendarEvent, width: CGFloat) -> some View {
+        Button(action: {
+            onEventClick(event)
+        }) {
+            Text(event.title)
+                .font(.system(size: min(6, width * 0.25), weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .padding(.horizontal, max(1, width * 0.05))
+                .padding(.vertical, 1)
+                .background(event.color)
+                .cornerRadius(2)
+                .minimumScaleFactor(0.4)
+        }
+        .buttonStyle(PlainButtonStyle())
     }
     
     // 对齐的空单元格
@@ -524,12 +830,10 @@ struct YearView: View {
         return weekday == 5 || weekday == 6 // 周六=5, 周日=6 (因为周一=0)
     }
     
-    // 获取对齐日期颜色
+    // 获取对齐日期颜色 - 移除有事件时的红色背景
     private func getAlignedDayColor(isToday: Bool, isWeekend: Bool, hasEvents: Bool) -> Color {
         if isToday {
             return Color.blue
-        } else if hasEvents {
-            return Color.red.opacity(0.7)
         } else if isWeekend {
             return Color.gray.opacity(0.15) // 周末背景色
         } else {
@@ -550,12 +854,10 @@ struct YearView: View {
             )
     }
     
-    // 获取线性日期颜色
+    // 获取线性日期颜色 - 移除有事件时的红色背景
     private func getLinearDayColor(isToday: Bool, isWeekend: Bool, hasEvents: Bool) -> Color {
         if isToday {
             return Color.blue
-        } else if hasEvents {
-            return Color.red.opacity(0.7)
         } else if isWeekend {
             return Color.gray.opacity(0.2)
         } else {
