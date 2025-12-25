@@ -89,6 +89,31 @@ extension Date {
         }
     }
     
+    // 获取年份中的所有日期 - 用于线性日历完整显示
+    func getAllDaysInYear() -> [Date] {
+        let calendar = Calendar.current
+        let startOfYear = self.startOfYear
+        let endOfYear = self.endOfYear
+        
+        var dates: [Date] = []
+        var currentDate = startOfYear
+        
+        while currentDate <= endOfYear {
+            dates.append(currentDate)
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
+            currentDate = nextDate
+        }
+        
+        return dates
+    }
+    
+    // 检查是否是闰年
+    func isLeapYear() -> Bool {
+        let calendar = Calendar.current
+        let year = calendar.component(.year, from: self)
+        return calendar.isLeapYear(year: year)
+    }
+    
     // 格式化为中文日期字符串
     func chineseFormat(_ format: String) -> String {
         let formatter = DateFormatter()
@@ -108,5 +133,31 @@ extension Date {
     var chineseWeekdayName: String {
         let weekdayNames = ["日", "一", "二", "三", "四", "五", "六"]
         return weekdayNames[weekday - 1]
+    }
+    
+    // 获取月份开始日期的星期几偏移量 - 用于线性月份边界对齐
+    func getWeekdayOffset(for firstDayOfMonth: Date) -> Int {
+        let calendar = Calendar.current
+        return calendar.component(.weekday, from: firstDayOfMonth) - 1 // 0=周日, 1=周一...
+    }
+    
+    // 获取月份中的天数 - 用于边界验证
+    func getDaysCountInMonth() -> Int {
+        let calendar = Calendar.current
+        return calendar.range(of: .day, in: .month, for: self)?.count ?? 0
+    }
+    
+    // 验证指定的日期数字是否在当月有效范围内
+    func isValidDayInMonth(_ dayNumber: Int) -> Bool {
+        let daysCount = getDaysCountInMonth()
+        return dayNumber > 0 && dayNumber <= daysCount
+    }
+}
+
+// MARK: - Calendar Extensions for Linear Calendar
+extension Calendar {
+    // 检查是否是闰年
+    func isLeapYear(year: Int) -> Bool {
+        return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
     }
 }
