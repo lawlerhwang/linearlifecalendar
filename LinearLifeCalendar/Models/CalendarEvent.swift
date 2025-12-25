@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import EventKit
 
 // 视图类型枚举
 enum ViewType: String, CaseIterable {
@@ -9,7 +10,7 @@ enum ViewType: String, CaseIterable {
     case year = "年"
 }
 
-// 日历事件模型（已移除EventKit依赖）
+// 日历事件模型（支持从EKEvent创建，只读模式）
 struct CalendarEvent: Identifiable, Hashable {
     let id: String
     let title: String
@@ -21,7 +22,18 @@ struct CalendarEvent: Identifiable, Hashable {
     let color: Color
     let calendarIdentifier: String?
     
-    // 移除从EKEvent初始化的方法，因为不再使用EventKit
+    // 从EKEvent创建CalendarEvent（只读）
+    init(from ekEvent: EKEvent) {
+        self.id = ekEvent.eventIdentifier
+        self.title = ekEvent.title ?? "无标题"
+        self.startDate = ekEvent.startDate
+        self.endDate = ekEvent.endDate
+        self.isAllDay = ekEvent.isAllDay
+        self.location = ekEvent.location
+        self.notes = ekEvent.notes
+        self.color = Color(ekEvent.calendar.cgColor)
+        self.calendarIdentifier = ekEvent.calendar.calendarIdentifier
+    }
     
     init(id: String = UUID().uuidString,
          title: String,

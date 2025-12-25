@@ -23,5 +23,7 @@
 
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>此应用需要访问您的日历来显示日程安排（只读模式）</string>
 </dict>
 </plist>

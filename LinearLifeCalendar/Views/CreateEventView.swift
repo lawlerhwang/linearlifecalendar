@@ -198,10 +198,10 @@ struct CreateEventView: View {
         .padding(.top, 24)
     }
     
-    // 显示禁用信息而不是保存事件
+    // 显示只读模式信息而不是保存事件
     private func saveEvent() {
-        // 显示禁用信息
-        calendarManager.errorMessage = "事件创建已禁用：此应用不再访问iCloud日历"
+        // 显示只读模式信息
+        calendarManager.errorMessage = "只读模式：无法创建新事件。此功能已被禁用以保护您的日历数据安全。"
         dismiss()
     }
 }

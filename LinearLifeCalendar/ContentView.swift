@@ -102,18 +102,23 @@ struct ContentView: View {
                         .frame(minWidth: 120)
                 }
                 
-                // 添加事件按钮
+                // 添加事件按钮（只读模式下禁用）
                 Button(action: {
-                    selectedDate = Date()
-                    selectedEndDate = nil
-                    showingCreateEvent = true
+                    if calendarManager.isReadOnlyMode {
+                        calendarManager.errorMessage = "只读模式：无法创建新事件"
+                    } else {
+                        selectedDate = Date()
+                        selectedEndDate = nil
+                        showingCreateEvent = true
+                    }
                 }) {
                     HStack(spacing: 6) {
-                        Image(systemName: "plus")
-                        Text("添加日历")
+                        Image(systemName: calendarManager.isReadOnlyMode ? "eye" : "plus")
+                        Text(calendarManager.isReadOnlyMode ? "只读模式" : "添加日历")
                     }
                 }
-                .buttonStyle(AddButtonStyle())
+                .buttonStyle(AddButtonStyle(isDisabled: calendarManager.isReadOnlyMode))
+                .disabled(calendarManager.isReadOnlyMode)
             }
         }
         .padding(.horizontal, 20)
@@ -131,7 +136,7 @@ struct ContentView: View {
     private var mainContent: some View {
         Group {
             if !calendarManager.hasCalendarAccess {
-                accessDeniedView
+                calendarAccessView
             } else if calendarManager.isLoading {
                 loadingView
             } else {
@@ -163,26 +168,42 @@ struct ContentView: View {
         }
     }
     
-    // 日历访问已禁用视图
-    private var accessDeniedView: some View {
+    // 日历访问状态视图
+    private var calendarAccessView: some View {
         VStack(spacing: 20) {
-            Image(systemName: "calendar.badge.minus")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
-            
-            Text("iCloud日历访问已禁用")
-                .font(.title)
-                .fontWeight(.semibold)
-            
-            Text("此应用已禁用对系统日历的访问权限，无法显示或管理iCloud日历事件")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Text("您可以使用应用内的日历功能来管理本地事件")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+            if calendarManager.isReadOnlyMode {
+                Image(systemName: "eye")
+                    .font(.system(size: 60))
+                    .foregroundColor(.blue)
+                
+                Text("只读模式")
+                    .font(.title)
+                    .fontWeight(.semibold)
+                
+                Text("应用正在只读模式下运行，可以查看您的iCloud日历事件，但无法创建或修改事件")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                if !calendarManager.hasCalendarAccess {
+                    Button("请求日历访问权限") {
+                        calendarManager.requestCalendarAccess()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("已连接到iCloud日历")
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Button("刷新日历数据") {
+                        calendarManager.refreshEvents()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -310,15 +331,21 @@ struct TodayButtonStyle: ButtonStyle {
 }
 
 struct AddButtonStyle: ButtonStyle {
+    let isDisabled: Bool
+    
+    init(isDisabled: Bool = false) {
+        self.isDisabled = isDisabled
+    }
+    
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(Color.black)
-            .foregroundColor(.white)
+            .background(isDisabled ? Color.gray.opacity(0.3) : Color.black)
+            .foregroundColor(isDisabled ? .secondary : .white)
             .cornerRadius(8)
-            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+            .shadow(color: isDisabled ? .clear : .black.opacity(0.2), radius: 4, x: 0, y: 2)
             .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
